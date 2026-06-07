@@ -18,10 +18,10 @@
 ## 실행 환경
 
 - Python 3.10+
-- 필요 라이브러리: `streamlit`, `matplotlib`, `numpy`
+- 필요 라이브러리: `streamlit`, `matplotlib`, `numpy`, `streamlit-image-coordinates`, `Pillow`
 
 ```bash
-pip install streamlit matplotlib numpy
+pip install streamlit matplotlib numpy streamlit-image-coordinates Pillow
 ```
 
 ---
