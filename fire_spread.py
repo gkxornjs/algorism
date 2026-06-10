@@ -33,24 +33,28 @@ def count_adjacent_walls(grid, r, c):
     return wall_count
 
 
-ROOM = "R"
+def get_random_fire_position(grid):
+    positions = generate_fire_positions(grid, 1)
 
-def get_random_fire_positions(grid, count=1):
-    """
-    화재 발생 후보 셀 중 count개를 중복 없이 랜덤 선택
-    후보: 이동 가능한 모든 셀 (., S, R)
-    """
+    if not positions:
+        return None
+
+    return positions[0]
+
+
+def generate_fire_positions(grid, count=1):
     candidates = []
 
     for r in range(len(grid)):
         for c in range(len(grid[r])):
-            if grid[r][c] in [EMPTY, START, ROOM]:
+            if grid[r][c] in [EMPTY, START, FIRE]:
                 candidates.append((r, c))
 
     if not candidates:
         return []
 
-    return random.sample(candidates, min(count, len(candidates)))
+    count = min(count, len(candidates))
+    return random.sample(candidates, count)
 
 
 def get_neighbors_by_greedy(grid, r, c):
@@ -68,35 +72,43 @@ def get_neighbors_by_greedy(grid, r, c):
 
 
 def simulate_fire_spread(grid, fire_positions):
-    """
-    fire_positions: 단일 튜플 (r, c) 또는 튜플 리스트 [(r,c), ...]
-    다중 화재 지점을 BFS 큐에 동시에 넣어 동시 확산 처리
-    """
     rows = len(grid)
     cols = len(grid[0])
+
+    fire_time = [[-1 for _ in range(cols)] for _ in range(rows)]
+    queue = deque()
+    fire_log = {}
+
+    if fire_positions is None:
+        fire_positions = []
 
     if isinstance(fire_positions, tuple):
         fire_positions = [fire_positions]
 
-    INF = float('inf')
-    fire_time = [[INF for _ in range(cols)] for _ in range(rows)]
-    queue = deque()
+    print("=== 화재 확산 시뮬레이션 시작 ===")
 
-    fire_log = {0: []}
     for fr, fc in fire_positions:
+        if not is_valid(grid, fr, fc):
+            continue
+
+        if grid[fr][fc] == WALL:
+            continue
+
         fire_time[fr][fc] = 0
         queue.append((fr, fc))
-        fire_log[0].append((fr, fc))
 
-    print("=== 화재 확산 시뮬레이션 시작 ===")
-    print(f"t=0: 화재 발생 위치 {fire_log[0]}")
+        if 0 not in fire_log:
+            fire_log[0] = []
+
+        fire_log[0].append((fr, fc))
+        print(f"t=0: 화재 발생 위치 ({fr}, {fc})")
 
     while queue:
         r, c = queue.popleft()
         current_time = fire_time[r][c]
 
         for nr, nc in get_neighbors_by_greedy(grid, r, c):
-            if fire_time[nr][nc] == INF:
+            if fire_time[nr][nc] == -1:
                 fire_time[nr][nc] = current_time + 1
                 queue.append((nr, nc))
 
@@ -108,9 +120,32 @@ def simulate_fire_spread(grid, fire_positions):
     for time in sorted(fire_log.keys()):
         if time == 0:
             continue
+
         print(f"t={time}: 화재 확산 -> {fire_log[time]}")
 
     return fire_time, fire_log
+
+
+def get_fire_cells_at_time(fire_time, t):
+    fire_cells = []
+
+    for r in range(len(fire_time)):
+        for c in range(len(fire_time[r])):
+            if fire_time[r][c] != -1 and fire_time[r][c] <= t:
+                fire_cells.append((r, c))
+
+    return fire_cells
+
+
+def get_new_fire_cells_at_time(fire_time, t):
+    fire_cells = []
+
+    for r in range(len(fire_time)):
+        for c in range(len(fire_time[r])):
+            if fire_time[r][c] == t:
+                fire_cells.append((r, c))
+
+    return fire_cells
 
 
 def print_fire_map_at_time(grid, fire_time, t):
@@ -120,12 +155,29 @@ def print_fire_map_at_time(grid, fire_time, t):
         row = []
 
         for c in range(len(grid[r])):
-            if fire_time[r][c] <= t:
-                row.append("F")
+            if fire_time[r][c] != -1 and fire_time[r][c] <= t:
+                row.append("🔥")
             else:
                 row.append(grid[r][c])
 
         print(" ".join(row))
+
+
+def get_fire_map_at_time(grid, fire_time, t):
+    current_map = []
+
+    for r in range(len(grid)):
+        row = []
+
+        for c in range(len(grid[r])):
+            if fire_time[r][c] != -1 and fire_time[r][c] <= t:
+                row.append("🔥")
+            else:
+                row.append(grid[r][c])
+
+        current_map.append(row)
+
+    return current_map
 
 
 def get_exit_fire_times(fire_time, exits):
@@ -135,25 +187,12 @@ def get_exit_fire_times(fire_time, exits):
 
     for exit_pos in exits:
         r, c = exit_pos
-        t = fire_time[r][c]
-        result[exit_pos] = t
+        time = fire_time[r][c]
+        result[exit_pos] = time
 
-        if t == float('inf'):
+        if time == -1:
             print(f"출구 {exit_pos}: 화재 미도달")
         else:
-            print(f"출구 도달 예상 시간: t={t} -> 출구 {exit_pos}")
+            print(f"출구 도달 예상 시간: t={time} -> 출구 {exit_pos}")
 
     return result
-
-
-def simulate_fire(grid, fire_count=1):
-    """
-    연동용 래퍼: 랜덤 화재 위치 fire_count개 선정 후 확산 시뮬레이션 실행
-    반환: fire_time 2D 배열 (미도달 셀 = float('inf'))
-    """
-    fire_positions = get_random_fire_positions(grid, count=fire_count)
-    if not fire_positions:
-        rows, cols = len(grid), len(grid[0])
-        return [[float('inf')] * cols for _ in range(rows)]
-    fire_time, _ = simulate_fire_spread(grid, fire_positions)
-    return fire_time
