@@ -112,6 +112,11 @@ C_ELEV    = [0.20, 0.50, 0.90]   # 엘리베이터 (E)
 C_PATH    = [1.00, 0.60, 0.10]   # 최단 경로 (*)
 C_VISITED = [0.75, 0.85, 1.00]   # A* 탐색 노드
 C_FLOOR   = [0.96, 0.96, 0.96]   # 일반 통로
+C_CHAR    = [0.55, 0.10, 0.80]   # 대피자(캐릭터) 현재 위치
+C_TRAIL   = [0.80, 0.70, 0.92]   # 지나온 자취
+C_FIREPT  = [0.65, 0.10, 0.05]   # 수동 지정 화재 발화점(시작 전 미리보기)
+
+FIRE_OK = ('.', 'R')   # 수동 화재 지정 가능 셀
 
 
 def load_base_map():
@@ -136,14 +141,19 @@ def generate_fire(grid_base, fire_count):
     return fire_time, positions, fire_log
 
 
-def build_color_array(grid, fire_time, path, visited, start, exits, current_time):
+def build_color_array(grid, fire_time, path, start, exits, current_time,
+                      char_pos=None, trail=None, fire_preview=None,
+                      trail_on_top=False):
     """
     맵을 rows×cols×3 RGB(float 0~1) 배열로 변환.
-    path_finder.visualize의 색 체계 재사용. 화재 도달은 도착 시각(current_time) 기준.
+    화재 도달은 현재 시각(current_time) 기준. 대피자(char_pos)·지나온 자취(trail)·
+    예정 경로(path)·수동 화재 발화점(fire_preview)을 함께 그린다.
+    trail_on_top=True면(탈출 완료 후) 자취를 화재 위에 그려 가려진 경로까지 보여준다.
     """
     rows, cols = len(grid), len(grid[0])
     path_set    = set(path) if path else set()
-    visited_set = set(visited) if visited else set()
+    trail_set   = set(trail) if trail else set()
+    preview_set = set(fire_preview) if fire_preview else set()
 
     img = np.zeros((rows, cols, 3))
     for r in range(rows):
@@ -152,16 +162,22 @@ def build_color_array(grid, fire_time, path, visited, start, exits, current_time
             pos  = (r, c)
             if cell == '#':
                 img[r][c] = C_WALL
+            elif char_pos is not None and pos == tuple(char_pos):
+                img[r][c] = C_CHAR            # 대피자 현재 위치 (최우선)
+            elif trail_on_top and pos in trail_set:
+                img[r][c] = C_TRAIL           # 탈출 완료 후: 화재보다 우선해 경로 표시
             elif fire_time[r][c] <= current_time:
                 img[r][c] = C_FIRE            # 현재 시각 기준 화재 도달
-            elif cell == 'S' or pos == tuple(start):
-                img[r][c] = C_START
+            elif pos in preview_set:
+                img[r][c] = C_FIREPT          # 시작 전 수동 화재 발화점 미리보기
             elif cell == 'X':
                 img[r][c] = C_EXIT
             elif pos in path_set:
-                img[r][c] = C_PATH
-            elif pos in visited_set:
-                img[r][c] = C_VISITED
+                img[r][c] = C_PATH            # 지금 위치에서 출구까지 예정 경로
+            elif pos in trail_set:
+                img[r][c] = C_TRAIL           # 지나온 자취
+            elif cell == 'S' or pos == tuple(start):
+                img[r][c] = C_START
             elif cell == 'E':
                 img[r][c] = C_ELEV
             else:
@@ -169,12 +185,15 @@ def build_color_array(grid, fire_time, path, visited, start, exits, current_time
     return img
 
 
-def build_map_image(grid, fire_time, path, visited, start, exits, current_time, cell_px=12):
+def build_map_image(grid, fire_time, path, start, exits, current_time, cell_px=12,
+                    char_pos=None, trail=None, fire_preview=None, trail_on_top=False):
     """
     색상 배열을 셀당 cell_px 픽셀로 확대한 PIL 이미지로 변환.
     클릭 좌표 → 셀 매핑이 선형이 되도록 축/여백 없이 순수 픽셀로 렌더한다.
     """
-    img = build_color_array(grid, fire_time, path, visited, start, exits, current_time)
+    img = build_color_array(grid, fire_time, path, start, exits, current_time,
+                            char_pos=char_pos, trail=trail, fire_preview=fire_preview,
+                            trail_on_top=trail_on_top)
     arr = (img * 255).astype(np.uint8)
     big = np.repeat(np.repeat(arr, cell_px, axis=0), cell_px, axis=1)
     return Image.fromarray(big)
@@ -190,8 +209,8 @@ def _swatch(color, label):
 def legend_html():
     """클릭형 이미지에는 범례가 없으므로 HTML 색상 범례를 따로 그린다."""
     items = [
-        (C_START, '시작(S)'), (C_EXIT, '비상구(X)'), (C_FIRE, '화재'),
-        (C_PATH, '최단경로'), (C_VISITED, 'A* 탐색'),
+        (C_CHAR, '대피자'), (C_START, '시작(S)'), (C_EXIT, '비상구(X)'),
+        (C_FIRE, '화재'), (C_PATH, '예정 경로'), (C_TRAIL, '지나온 길'),
         (C_ELEV, '엘리베이터(E)'), (C_WALL, '벽(#)'),
     ]
     return "".join(_swatch(c, l) for c, l in items)
@@ -229,7 +248,185 @@ def simulate_evacuees(grid_base, fire_time, exits, current_time, n=10):
     return evacuees, sorted_times
 
 
+def advance_simulation(grid_base, fire_time, exits):
+    """
+    (b) 실시간 재경로 — 매 스텝마다 '대피자 현재 위치 + 현재 화재 상황' 기준으로
+    A*를 다시 돌려 한 칸 이동시키고 시각을 1 진행한다. session_state를 직접 갱신.
+    """
+    import streamlit as st
+    t   = st.session_state["sim_time"]
+    pos = tuple(st.session_state["char_pos"])
+    exit_set = {tuple(e) for e in exits}
+
+    # 이미 출구 도착 → 탈출 성공
+    if pos in exit_set:
+        st.session_state["char_state"] = "escaped"
+        st.session_state["playing"] = False
+        return
+
+    # 현재 위치가 화재에 휩싸임 → 탈출 실패
+    if fire_time[pos[0]][pos[1]] <= t:
+        st.session_state["char_state"] = "trapped"
+        st.session_state["playing"] = False
+        return
+
+    # ── 1) 안전 경로(도착 시점까지 화재 안전) 우선 탐색 ──
+    path, dist, best_exit, visited = find_best_exit(
+        grid_base, fire_time, pos, exits, t
+    )
+    if path and len(path) >= 2:
+        st.session_state["plan_path"] = path
+        st.session_state["plan_dist"] = dist
+        st.session_state["best_exit"] = best_exit
+        st.session_state["visited_n"] = len(visited) if visited else 0
+        st.session_state["risky"] = False
+        nxt = tuple(path[1])
+        st.session_state["char_pos"] = nxt
+        st.session_state["trail"].append(nxt)
+        st.session_state["sim_time"] = t + 1
+        if nxt in exit_set:
+            st.session_state["char_state"] = "escaped"
+            st.session_state["playing"] = False
+        return
+
+    # 이미 출구에 서 있던 경우(len==1) → 성공
+    if path and tuple(path[-1]) in exit_set:
+        st.session_state["char_state"] = "escaped"
+        st.session_state["playing"] = False
+        return
+
+    # ── 2) 안전 경로 없음 → best-effort: 불 안 붙은 칸으로 출구 방향 한 칸 전진 ──
+    #     실제로 둘러싸이거나 불에 닿을 때까지 계속 움직여 '막히는 과정'을 보여준다.
+    st.session_state["plan_path"] = []
+    st.session_state["best_exit"] = best_exit
+    st.session_state["visited_n"] = 0
+    st.session_state["risky"] = True
+
+    trail = st.session_state["trail"]
+    prev = tuple(trail[-2]) if len(trail) >= 2 else None
+    nxt = _best_effort_next(grid_base, fire_time, pos, exits, t, prev=prev)
+    if nxt is None:
+        st.session_state["char_state"] = "trapped"
+        st.session_state["playing"] = False
+        return
+
+    st.session_state["char_pos"] = nxt
+    trail.append(nxt)
+    st.session_state["sim_time"] = t + 1
+    if nxt in exit_set:
+        st.session_state["char_state"] = "escaped"
+        st.session_state["playing"] = False
+
+
+def _best_effort_next(grid, fire_time, pos, exits, t, prev=None):
+    """
+    안전 경로가 없을 때의 한 칸 선택. 현재 불타지 않는 이웃 칸 중
+    가장 가까운 출구 방향으로 전진한다. 직전 칸으로의 즉시 후퇴는
+    다른 선택지가 있으면 피한다. 갈 곳이 없으면 None(=고립).
+    """
+    rows, cols = len(grid), len(grid[0])
+    r, c = pos
+
+    def exit_dist(rr, cc):
+        return min(abs(rr - er) + abs(cc - ec) for er, ec in exits)
+
+    candidates = []
+    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+        nr, nc = r + dr, c + dc
+        if not (0 <= nr < rows and 0 <= nc < cols):
+            continue
+        if grid[nr][nc] == '#':
+            continue
+        if fire_time[nr][nc] <= t:      # 현재 불타는 칸 제외
+            continue
+        candidates.append((nr, nc))
+
+    if not candidates:
+        return None
+
+    non_back = [p for p in candidates if prev is None or p != prev]
+    pool = non_back if non_back else candidates
+    pool.sort(key=lambda p: exit_dist(*p))
+    return pool[0]
+
+
+def _init_sim_state(st):
+    """시뮬레이션 관련 session_state 기본값 1회 초기화."""
+    defaults = {
+        "start": (50, 5),       # 기본 시작 위치(출구와 연결된 통로)
+        "phase": "setup",       # setup(설정) | running(재생)
+        "fire_mode": "랜덤",     # 랜덤 | 직접 지정
+        "click_target": "내 위치",  # 직접 지정 모드에서 클릭이 무엇을 찍을지
+        "manual_fires": [],     # 수동 화재 발화점 목록
+        "playing": False,       # 자동 재생 여부
+        "speed": 0.5,           # 한 스텝당 대기(초)
+        "sim_time": 0,          # 경과 시각 t
+        "char_pos": None,       # 대피자 현재 위치
+        "char_state": "moving",  # moving | escaped | trapped
+        "trail": [],            # 지나온 자취
+        "plan_path": [],        # 현재 예정 경로
+        "plan_dist": INF,
+        "best_exit": None,
+        "visited_n": 0,
+        "risky": False,         # 안전 경로 없이 위험 이동(best-effort) 중인지
+        "fire_time": None,      # 확산 시뮬레이션 결과
+        "fire_positions": [],
+        "evac_total": 0,        # 통계(시작 시 1회 고정)
+        "evac_sorted": [],
+        "last_click": None,     # 마지막으로 '처리한' 지도 클릭값 (중복 처리 방지)
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def _start_simulation(st, grid_base, exits):
+    """화재를 확정하고 재생 단계로 진입 — 통계도 이때 1회만 계산해 고정."""
+    if st.session_state["fire_mode"] == "랜덤":
+        positions = get_random_fire_positions(
+            grid_base, count=st.session_state["fire_count"]
+        )
+        # 랜덤 모드: '시작'마다 내 위치도 통로/강의실 중 무작위로 새로 뽑음
+        st.session_state["start"] = pick_random_start(grid_base)
+    else:
+        positions = list(st.session_state["manual_fires"])
+
+    if not positions:
+        st.warning("화재 발화점이 없습니다. 화재 지점을 1곳 이상 지정하세요.")
+        return
+
+    fire_time, _log = simulate_fire_spread(grid_base, positions)
+
+    st.session_state["fire_time"] = fire_time
+    st.session_state["fire_positions"] = positions
+    st.session_state["phase"] = "running"
+    st.session_state["sim_time"] = 0
+    st.session_state["char_pos"] = st.session_state["start"]
+    st.session_state["char_state"] = "moving"
+    st.session_state["trail"] = [st.session_state["start"]]
+    st.session_state["plan_path"] = []
+    st.session_state["playing"] = True
+
+    # 대피 통계는 시작 시 한 번만 계산해 고정(매 프레임 재추첨 방지)
+    _evac, sorted_times = simulate_evacuees(grid_base, fire_time, exits, 0, n=10)
+    st.session_state["evac_total"] = 10
+    st.session_state["evac_sorted"] = sorted_times
+
+
+def _reset_simulation(st):
+    """재생 상태만 초기화하고 설정(시작점/화재 모드)은 유지."""
+    st.session_state["phase"] = "setup"
+    st.session_state["playing"] = False
+    st.session_state["sim_time"] = 0
+    st.session_state["char_pos"] = None
+    st.session_state["char_state"] = "moving"
+    st.session_state["trail"] = []
+    st.session_state["plan_path"] = []
+    st.session_state["fire_time"] = None
+
+
 def render_streamlit_ui():
+    import time
     import streamlit as st
     from streamlit_image_coordinates import streamlit_image_coordinates
 
@@ -241,51 +438,88 @@ def render_streamlit_ui():
     rows, cols = len(grid_base), len(grid_base[0])
     CELL_PX = 12   # 셀당 픽셀 (클릭 좌표 ↔ 셀 매핑 기준)
 
-    # 시작 위치는 지도 클릭으로 갱신 — session_state에 보관
-    if "start" not in st.session_state:
-        st.session_state["start"] = (50, 5)   # 기본값: 출구와 연결된 통로
+    _init_sim_state(st)
+    phase = st.session_state["phase"]
+    start = st.session_state["start"]
 
-    # ── 사이드바: 사용자 입력 ──
+    # ── 사이드바: 설정 / 재생 컨트롤 ──
     with st.sidebar:
         st.header("⚙️ 시뮬레이션 설정")
 
-        sr, sc = st.session_state["start"]
-        st.subheader("📍 현재 위치 (S)")
+        sr, sc = start
+        st.subheader("📍 내 위치 (S)")
         st.success(f"행 {sr + 1}, 열 {sc + 1}")
-        st.caption("👉 오른쪽 지도에서 통로/강의실 칸을 클릭하면 위치가 바뀝니다.")
 
-        st.subheader("🔥 화재 발생")
-        fire_count = st.number_input("화재 지점 수", 1, 5, value=2, step=1)
-        if st.button("화재 발생 / 재발생", type="primary", use_container_width=True):
-            fire_time, positions, fire_log = generate_fire(grid_base, fire_count)
-            max_t = max(fire_log.keys()) if fire_log else 0
-            st.session_state["fire_time"] = fire_time
-            st.session_state["fire_positions"] = positions
-            st.session_state["max_t"] = max_t
+        if phase == "setup":
+            st.caption("👉 오른쪽 지도에서 통로/강의실 칸을 클릭하면 위치가 바뀝니다.")
 
-        st.subheader("⏱️ 시간")
-        if "fire_time" in st.session_state:
-            max_t = st.session_state.get("max_t", 0)
-            current_time = st.slider("경과 시간 t", 0, max(max_t, 1), value=0)
-        else:
-            current_time = 0
-            st.info("‘화재 발생’ 버튼을 눌러 시뮬레이션을 시작하세요.")
+            st.subheader("🔥 화재 설정")
+            st.session_state["fire_mode"] = st.radio(
+                "발화 방식", ["랜덤", "직접 지정"],
+                index=0 if st.session_state["fire_mode"] == "랜덤" else 1,
+                horizontal=True,
+            )
+            if st.session_state["fire_mode"] == "랜덤":
+                st.session_state["fire_count"] = st.number_input(
+                    "화재 지점 수", 1, 5, value=st.session_state.get("fire_count", 2),
+                    step=1,
+                )
+            else:
+                st.session_state["click_target"] = st.radio(
+                    "지도 클릭 시 찍을 대상", ["내 위치", "화재 지점"],
+                    index=0 if st.session_state["click_target"] == "내 위치" else 1,
+                    horizontal=True,
+                )
+                st.caption(f"지정한 화재 발화점: {st.session_state['manual_fires']}")
+                if st.button("화재 지점 초기화", use_container_width=True):
+                    st.session_state["manual_fires"] = []
+                    st.rerun()
 
-    start = st.session_state["start"]
+            st.divider()
+            if st.button("▶️ 시뮬레이션 시작", type="primary",
+                         use_container_width=True):
+                _start_simulation(st, grid_base, exits)
+                st.rerun()
 
-    # ── 화재 상태 / 경로 탐색 (매 rerun) ──
-    fire_present = "fire_time" in st.session_state
-    if fire_present:
+        else:  # running
+            st.subheader("⏱️ 경과 시간")
+            st.metric("t", st.session_state["sim_time"])
+            st.session_state["speed"] = st.slider(
+                "재생 속도", 0.1, 1.5, st.session_state["speed"], 0.1
+            )
+            st.caption("👈 빠름  ·  느림 👉")
+
+            moving = st.session_state["char_state"] == "moving"
+            b1, b2 = st.columns(2)
+            if moving:
+                label = "⏸️ 일시정지" if st.session_state["playing"] else "▶️ 재생"
+                if b1.button(label, use_container_width=True):
+                    st.session_state["playing"] = not st.session_state["playing"]
+                    st.rerun()
+                if b2.button("⏭️ 다음 단계", use_container_width=True,
+                             disabled=st.session_state["playing"]):
+                    advance_simulation(grid_base, st.session_state["fire_time"], exits)
+                    st.rerun()
+            if st.button("🔄 처음으로", use_container_width=True):
+                _reset_simulation(st)
+                st.rerun()
+
+    # ── 현재 화재/경로 상태 준비 ──
+    if phase == "running":
         fire_time = st.session_state["fire_time"]
-        fire_positions = st.session_state["fire_positions"]
-        possible, _ = is_escape_possible(grid_base, fire_time, start, exits, current_time)
-        path, dist, best_exit, visited = find_best_exit(
-            grid_base, fire_time, start, exits, current_time
-        )
+        current_time = st.session_state["sim_time"]
+        char_pos = st.session_state["char_pos"]
+        trail = st.session_state["trail"]
+        plan_path = st.session_state["plan_path"]
+        fire_preview = None
     else:
         fire_time = [[INF] * cols for _ in range(rows)]
-        fire_positions = []
-        possible, path, dist, best_exit, visited = False, None, INF, None, None
+        current_time = 0
+        char_pos = None
+        trail = None
+        plan_path = None
+        fire_preview = (st.session_state["manual_fires"]
+                        if st.session_state["fire_mode"] == "직접 지정" else None)
 
     grid = make_grid_with_start(grid_base, start)
 
@@ -295,63 +529,91 @@ def render_streamlit_ui():
     with col_map:
         st.subheader(f"🗺️ 실시간 대피 맵  (t = {current_time})")
         pil = build_map_image(
-            grid, fire_time, path, visited, start, exits, current_time, CELL_PX
+            grid, fire_time, plan_path, start, exits, current_time, CELL_PX,
+            char_pos=char_pos, trail=trail, fire_preview=fire_preview,
+            trail_on_top=(st.session_state["char_state"] == "escaped"),
         )
         coords = streamlit_image_coordinates(pil, key="map_click")
         st.markdown(legend_html(), unsafe_allow_html=True)
-        st.caption("지도의 통로(흰색)·강의실(R) 칸을 클릭해 현재 위치(S)를 옮기세요.")
 
-        # 클릭 → 셀 매핑 (반환된 표시 크기 기준으로 비율 환산)
-        if coords is not None:
-            cc = int(coords["x"] / coords["width"] * cols)
-            cr = int(coords["y"] / coords["height"] * rows)
-            cr = min(max(cr, 0), rows - 1)
-            cc = min(max(cc, 0), cols - 1)
-            clicked = (cr, cc)
-            if clicked != start:
-                if grid_base[cr][cc] in PASSABLE_START:
-                    st.session_state["start"] = clicked
-                    st.rerun()
-                else:
-                    st.warning(f"({cr + 1}, {cc + 1})은(는) 이동할 수 없는 칸입니다. "
-                               "통로/강의실을 클릭하세요.")
+        if phase == "setup":
+            st.caption("지도의 통로(흰색)·강의실(R) 칸을 클릭하세요. "
+                       "‘직접 지정’ 모드에선 클릭 대상(내 위치/화재)을 사이드바에서 고릅니다.")
+            # 클릭 → 셀 매핑. 컴포넌트는 같은 클릭값을 rerun마다 다시 돌려주므로
+            # '새 클릭'일 때만 처리한다(중복 처리 = 화면 떨림/엉뚱한 반영의 원인).
+            sig = tuple(sorted(coords.items())) if coords is not None else None
+            if sig is not None and sig != st.session_state["last_click"]:
+                st.session_state["last_click"] = sig
+                cc = min(max(int(coords["x"] / coords["width"] * cols), 0), cols - 1)
+                cr = min(max(int(coords["y"] / coords["height"] * rows), 0), rows - 1)
+                clicked = (cr, cc)
+                manual_fire = (st.session_state["fire_mode"] == "직접 지정"
+                               and st.session_state["click_target"] == "화재 지점")
+                if manual_fire:
+                    if grid_base[cr][cc] in FIRE_OK:
+                        fires = st.session_state["manual_fires"]
+                        if clicked in fires:
+                            fires.remove(clicked)   # 다시 클릭하면 해제
+                        else:
+                            fires.append(clicked)
+                        st.rerun()
+                    else:
+                        st.warning(f"({cr + 1}, {cc + 1})은(는) 화재를 둘 수 없는 칸입니다.")
+                elif clicked != start:
+                    if grid_base[cr][cc] in PASSABLE_START:
+                        st.session_state["start"] = clicked
+                        st.rerun()
+                    else:
+                        st.warning(f"({cr + 1}, {cc + 1})은(는) 이동할 수 없는 칸입니다. "
+                                   "통로/강의실을 클릭하세요.")
+        else:
+            st.caption("▶️ 재생 중에는 지도 클릭이 비활성화됩니다. "
+                       "위치/화재를 바꾸려면 ‘처음으로’를 누르세요.")
 
     with col_info:
-        if not fire_present:
-            st.info("👈 지도를 클릭해 위치를 정하고 **화재 발생** 버튼을 누르세요.")
+        if phase == "setup":
+            st.info("👈 위치와 화재를 설정한 뒤 **시뮬레이션 시작**을 누르세요.")
+            st.markdown(
+                "- **랜덤**: 화재 지점 수만 정하면 무작위로 발화\n"
+                "- **직접 지정**: 실제 상황처럼 화재 위치를 클릭으로 지정\n"
+                "- 시작하면 대피자가 **매 순간 화재를 피해 경로를 다시 잡으며** 탈출합니다."
+            )
             return
 
-        st.subheader("🧭 탈출 경로")
-        if path:
-            fire_at_exit = fire_time[best_exit[0]][best_exit[1]]
-            safe = dist < fire_at_exit
-            st.success("탈출 가능 ✅" if safe else "탈출 경로 존재 (위험) ⚠️")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("이동 거리", f"{dist} 칸")
-            m2.metric("도착 출구", f"{best_exit}")
-            m3.metric("출구 화재 도달",
-                      "안전" if fire_at_exit == INF else f"t={int(fire_at_exit)}")
-            st.caption(f"A* 탐색 노드: {len(visited) if visited else 0}개  ·  "
-                       f"화재 발생 지점: {fire_positions}")
+        # ── 재생 단계: 대피자 상태 ──
+        st.subheader("🧭 대피 진행")
+        state = st.session_state["char_state"]
+        t = st.session_state["sim_time"]
+        if state == "escaped":
+            st.success(f"탈출 성공 ✅ — {t}초 만에 비상구 도착")
+        elif state == "trapped":
+            st.error(f"탈출 실패 ❌ — 화재에 가로막힘 (t={t})")
+        elif st.session_state["risky"]:
+            st.warning("⚠️ 안전 경로 없음 — 화재를 피해 탈출 시도 중…")
         else:
-            start_on_fire = fire_time[start[0]][start[1]] <= current_time
-            if start_on_fire:
-                st.error("탈출 불가 ❌ — 현재 위치가 화재에 휩싸였습니다.")
-            elif possible:
-                st.error("탈출 불가 ❌ — 출구로 가는 경로가 화재로 차단되었습니다.")
-            else:
-                st.error("도달 가능한 출구가 없습니다 ❌ — 고립된 구역이거나 "
-                         "모든 출구가 화재로 차단되었습니다.")
-            st.caption(f"화재 발생 지점: {fire_positions}")
+            remain = max(len(st.session_state["plan_path"]) - 1, 0)
+            st.info(f"🟣 대피 중 — 출구까지 약 {remain}칸 남음")
+
+        best_exit = st.session_state["best_exit"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("이동한 거리", f"{max(len(st.session_state['trail']) - 1, 0)} 칸")
+        m2.metric("목표 출구", f"{best_exit}" if best_exit else "—")
+        if best_exit:
+            fa = st.session_state["fire_time"][best_exit[0]][best_exit[1]]
+            m3.metric("출구 화재 도달", "안전" if fa == INF else f"t={int(fa)}")
+        else:
+            m3.metric("출구 화재 도달", "—")
+        st.caption(f"이번 스텝 A* 탐색 노드: {st.session_state['visited_n']}개  ·  "
+                   f"화재 발화점: {st.session_state['fire_positions']}")
 
         st.divider()
-        st.subheader("📊 대피 통계 (랜덤 10명 시뮬레이션)")
-        target_time = st.slider("목표 탈출 시간", 0, 50, value=20, key="target_t")
-        evacuees, sorted_times = simulate_evacuees(
-            grid_base, fire_time, exits, current_time, n=10
-        )
-        total = len(evacuees)
+        st.subheader("📊 전체 대피 통계 (랜덤 10명)")
+        st.caption("시작 시점에 무작위 10명을 배치해 각자 최단 경로로 탈출시킨 결과입니다.")
+        sorted_times = st.session_state["evac_sorted"]
+        total = st.session_state["evac_total"]
         success = len(sorted_times)
+        target_time = st.slider("목표 탈출 시간(초)", 0, 50, value=20, key="target_t")
+        st.caption("👆 이 시간 안에 몇 명이 빠져나갔는지(이진 탐색) 확인하는 기준입니다.")
         under = binary_search_time(sorted_times, target_time)
         avg = sum(sorted_times) / success if success else 0.0
 
@@ -360,6 +622,13 @@ def render_streamlit_ui():
         s2.metric("평균 탈출시간", f"{avg:.1f}" if success else "—")
         s3.metric(f"t≤{target_time} 인원", f"{under}명")
         st.caption(f"탈출시간 정렬(퀵정렬): {sorted_times}")
+
+    # ── 자동 재생: 한 프레임 보여준 뒤 한 스텝 진행하고 rerun ──
+    if (phase == "running" and st.session_state["playing"]
+            and st.session_state["char_state"] == "moving"):
+        time.sleep(st.session_state["speed"])
+        advance_simulation(grid_base, st.session_state["fire_time"], exits)
+        st.rerun()
 
 
 def _running_in_streamlit():
