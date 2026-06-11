@@ -3,12 +3,17 @@
 # 재난 대피 경로 안내 시스템 - 최적 대피 경로 탐색 모듈
 # 담당: 팀원 3
 #
+# 실행 환경: VSCode / Python 3.9+
+# 필요 라이브러리: matplotlib (pip install matplotlib)
+#
 # 자료구조: 우선순위 큐(heapq), 그래프(인접 리스트), 배열
 # 알고리즘: A*(최단 경로 탐색), 유니온-파인드(연결성 확인)
+#
+# Input 데이터: RAW_MAP, FIRE_TIME — 직접 구성 (독립 실행용 테스트 데이터)
+#              실제 실행 시 map_builder.py / fire_spread.py 에서 전달받음
 # ============================================================
 
 import heapq
-import math
 import time
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches

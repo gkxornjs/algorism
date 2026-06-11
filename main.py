@@ -1,3 +1,20 @@
+# ============================================================
+# main.py
+# 재난 대피 경로 안내 시스템 - 통합 실행 및 Streamlit UI 모듈
+#
+# 실행 환경: VSCode / Python 3.9+
+#   - 통합 테스트: python main.py
+#   - UI 실행:     streamlit run main.py
+#
+# 필요 라이브러리: requirements.txt 참고
+#   matplotlib, numpy, Pillow, streamlit, streamlit-image-coordinates
+#
+# 자료구조: 2D 배열(맵/화재), 딕셔너리(session_state), 우선순위 큐(A* 내부)
+# 알고리즘: A*(최단 경로 탐색), BFS(화재 확산), 퀵 정렬, 이진 탐색, 유니온-파인드
+#
+# Input 데이터: building_map.txt — 직접 구성 (가천대학교 AI공학관 기반)
+# ============================================================
+
 import os
 import copy
 import random
@@ -12,7 +29,7 @@ from fire_spread import (
     get_random_fire_positions,
     get_exit_fire_times,
 )
-from path_finder import get_escape_path, is_escape_possible, find_best_exit, parse_map
+from path_finder import get_escape_path, find_best_exit
 from evacuation import (
     create_evacuee_dict,
     update_evacuee_result,

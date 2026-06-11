@@ -1,0 +1,17 @@
+# 재난 대피 경로 안내 시스템 - 필요 라이브러리
+# 설치 방법: pip install -r requirements.txt
+#
+# 실행 환경: VSCode / Python 3.9+
+
+# 시각화 (path_finder.py)
+matplotlib
+
+# 수치 배열 처리 (main.py)
+numpy
+
+# 이미지 처리 (main.py)
+Pillow
+
+# Streamlit UI (main.py)
+streamlit
+streamlit-image-coordinates

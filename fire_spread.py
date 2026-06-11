@@ -1,18 +1,23 @@
+# ============================================================
 # fire_spread.py
+# 재난 대피 경로 안내 시스템 - 화재 확산 시뮬레이션 모듈
+#
+# 실행 환경: VSCode / Python 3.9+
+# 필요 라이브러리: 없음 (Python 기본 내장 모듈만 사용)
+#
+# 자료구조: 큐(deque), 2D 배열(fire_time)
+# 알고리즘: BFS(화재 확산), 그리디(확산 우선순위 결정)
+#
+# Input 데이터: grid(2D 배열) — map_builder.py 에서 전달받음 / 직접 구성
+# ============================================================
 
 from collections import deque
 import random
-
-# 자료구조: 큐(deque)
-# 자료구조: 2D 배열(fire_time)
-# 알고리즘: BFS(화재 확산)
-# 알고리즘: 그리디(확산 우선순위 결정)
 
 WALL = "#"
 EMPTY = "."
 START = "S"
 FIRE = "F"
-EXIT = "E"
 
 DIRECTIONS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
@@ -58,6 +63,7 @@ def generate_fire_positions(grid, count=1):
 
 
 def get_neighbors_by_greedy(grid, r, c):
+    # 알고리즘: 그리디 — 벽 인접 수가 적은 개방 칸 우선 확산
     neighbors = []
 
     for dr, dc in DIRECTIONS:
@@ -75,8 +81,8 @@ def simulate_fire_spread(grid, fire_positions):
     rows = len(grid)
     cols = len(grid[0])
 
-    fire_time = [[-1 for _ in range(cols)] for _ in range(rows)]
-    queue = deque()
+    fire_time = [[-1 for _ in range(cols)] for _ in range(rows)]  # 자료구조: 2D 배열(fire_time)
+    queue = deque()  # 자료구조: 큐(deque) / 알고리즘: BFS 화재확산
     fire_log = {}
 
     if fire_positions is None:

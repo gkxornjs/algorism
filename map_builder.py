@@ -3,8 +3,13 @@
 # 재난 대피 경로 안내 시스템 - 맵 파싱 및 그래프 구성 모듈
 # 담당: 팀원 1 (민재)
 #
+# 실행 환경: VSCode / Python 3.9+
+# 필요 라이브러리: 없음 (Python 기본 내장 모듈만 사용)
+#
 # 자료구조: 2D 배열, 그래프(인접 리스트), 딕셔너리
 # 알고리즘: DFS(연결성 검증), 삽입 정렬(출구 거리 정렬)
+#
+# Input 데이터: building_map.txt — 직접 구성 (가천대학교 AI공학관 기반)
 # ============================================================
 
 import os
@@ -204,8 +209,6 @@ def build_map(filename="building_map.txt", start=None):
 # ============================================================
 
 if __name__ == "__main__":
-    import math
-
     MAP_FILE = os.path.join(os.path.dirname(__file__), "building_map.txt")
 
     print("=" * 50)

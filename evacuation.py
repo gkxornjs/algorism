@@ -1,12 +1,19 @@
+# ============================================================
 # evacuation.py
-
-# 자료구조: 해시맵(dict)
-# 자료구조: 스택(stack)
-# 알고리즘: 퀵 정렬
-# 알고리즘: 이진 탐색
+# 재난 대피 경로 안내 시스템 - 대피자 관리 및 통계 모듈
+#
+# 실행 환경: VSCode / Python 3.9+
+# 필요 라이브러리: 없음 (Python 기본 내장 모듈만 사용)
+#
+# 자료구조: 해시맵(dict), 스택(stack)
+# 알고리즘: 퀵 정렬, 이진 탐색
+#
+# Input 데이터: 대피자 정보(evacuee_list), 경로(path), fire_time — 직접 구성 / main.py에서 전달받음
+# ============================================================
 
 
 def create_evacuee_dict(evacuee_list):
+    # 자료구조: 해시맵(dict) — 대피자 ID를 키로 정보 저장
     evacuees = {}
 
     for evacuee_id, name, start_pos in evacuee_list:
@@ -25,6 +32,7 @@ def create_evacuee_dict(evacuee_list):
 
 
 def save_path_with_stack(path):
+    # 자료구조: 스택(stack) — 경로 역순 저장
     stack = []
 
     for pos in path:
@@ -135,6 +143,7 @@ def update_evacuee_result(evacuees, evacuee_id, path, fire_time):
 
 
 def quick_sort_escape_times(arr):
+    # 알고리즘: 퀵 정렬 — 탈출 시간 오름차순 정렬
     if len(arr) <= 1:
         return arr
 
@@ -148,6 +157,7 @@ def quick_sort_escape_times(arr):
 
 
 def binary_search_time(sorted_times, target_time):
+    # 알고리즘: 이진 탐색 — 목표 시간 이하 탈출 인원 수 탐색
     left = 0
     right = len(sorted_times) - 1
     answer = -1
